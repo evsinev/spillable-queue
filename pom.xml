@@ -25,6 +25,14 @@
         <junit.version>5.11.3</junit.version>
     </properties>
 
+    <distributionManagement>
+        <repository>
+            <id>mpos-repo</id>
+            <name>mpos release repository</name>
+            <url>https://mpos.pne.io/maven-deploy/releases</url>
+        </repository>
+    </distributionManagement>
+
     <dependencies>
         <!-- Prometheus metrics -->
         <dependency>
@@ -60,15 +68,12 @@
                 <version>3.5.2</version>
             </plugin>
 
-            <!-- mvn exec:java -Dexec.mainClass="com.queue.SpillableQueueDemo" -->
             <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>exec-maven-plugin</artifactId>
-                <version>3.4.1</version>
-                <configuration>
-                    <mainClass>com.queue.SpillableQueueDemo</mainClass>
-                </configuration>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-deploy-plugin</artifactId>
+                <version>3.1.4</version>
             </plugin>
+
         </plugins>
     </build>
 </project>
