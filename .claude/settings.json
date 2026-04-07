@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw *)",
+      "Bash(grep *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(find *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Bash(scp *)",
+      "Bash(ssh *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(source .env*)",
+      "Bash(export *)"
+    ]
+  }
+}
