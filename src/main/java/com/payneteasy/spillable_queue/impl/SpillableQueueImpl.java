@@ -2,6 +2,8 @@ package com.payneteasy.spillable_queue.impl;
 
 import com.payneteasy.spillable_queue.ISpillableQueue;
 import com.payneteasy.spillable_queue.ISpillableQueueSerializer;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
 
 import java.io.*;
 import java.nio.file.*;
@@ -47,6 +49,44 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public class SpillableQueueImpl<E extends Serializable> implements ISpillableQueue<E> {
 
+    /* ──────────────────────── metrics ──────────────────────── */
+
+    private static final Counter OFFERS_TOTAL = Counter.build()
+            .name("spillable_queue_offered_total")
+            .help("Total number of elements offered to the queue")
+            .labelNames("queue_name")
+            .register();
+
+    private static final Counter POLLS_TOTAL = Counter.build()
+            .name("spillable_queue_polled_total")
+            .help("Total number of elements polled from the queue")
+            .labelNames("queue_name")
+            .register();
+
+    private static final Counter SPILLS_TOTAL = Counter.build()
+            .name("spillable_queue_spills_total")
+            .help("Total number of spill-to-disk batch operations")
+            .labelNames("queue_name")
+            .register();
+
+    private static final Counter LOADS_TOTAL = Counter.build()
+            .name("spillable_queue_loads_total")
+            .help("Total number of load-from-disk batch operations")
+            .labelNames("queue_name")
+            .register();
+
+    private static final Gauge QUEUE_SIZE = Gauge.build()
+            .name("spillable_queue_size")
+            .help("Current total number of elements in the queue (memory + disk)")
+            .labelNames("queue_name")
+            .register();
+
+    private static final Gauge SPILL_FILES = Gauge.build()
+            .name("spillable_queue_spill_files")
+            .help("Current number of spill files on disk")
+            .labelNames("queue_name")
+            .register();
+
     /* ──────────────────────── configuration ──────────────────────── */
 
     private final int                          memoryCapacity;
@@ -54,6 +94,15 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
     private final Path                         spillDir;
     private final ISpillableQueueSerializer<E> ISpillableQueueSerializer;
     private final String                       queueName;
+
+    /* ──────────────────────── metric children (pre-bound label) ──────────────────────── */
+
+    private final Counter.Child offersCounter;
+    private final Counter.Child pollsCounter;
+    private final Counter.Child spillsCounter;
+    private final Counter.Child loadsCounter;
+    private final Gauge.Child   sizeGauge;
+    private final Gauge.Child   spillFilesGauge;
 
     /* ──────────────────────── state ──────────────────────── */
 
@@ -105,6 +154,13 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
         this.spillDir                  = spillDir;
         this.ISpillableQueueSerializer = ISpillableQueueSerializer;
 
+        this.offersCounter   = OFFERS_TOTAL.labels(aQueueName);
+        this.pollsCounter    = POLLS_TOTAL.labels(aQueueName);
+        this.spillsCounter   = SPILLS_TOTAL.labels(aQueueName);
+        this.loadsCounter    = LOADS_TOTAL.labels(aQueueName);
+        this.sizeGauge       = QUEUE_SIZE.labels(aQueueName);
+        this.spillFilesGauge = SPILL_FILES.labels(aQueueName);
+
         try {
             Files.createDirectories(spillDir);
         } catch (IOException e) {
@@ -129,6 +185,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
 
             writeBuffer.addLast(element);
             totalSize++;
+            offersCounter.inc();
+            sizeGauge.inc();
             notEmpty.signal();
         } finally {
             lock.unlock();
@@ -282,6 +340,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
         // 1. Read buffer has the oldest ready-to-read data
         if (!readBuffer.isEmpty()) {
             totalSize--;
+            pollsCounter.inc();
+            sizeGauge.dec();
             return readBuffer.pollFirst();
         }
 
@@ -290,6 +350,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
             loadFromDisk();
             if (!readBuffer.isEmpty()) {
                 totalSize--;
+                pollsCounter.inc();
+                sizeGauge.dec();
                 return readBuffer.pollFirst();
             }
         }
@@ -301,6 +363,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
             writeBuffer = tmp;  // reuse the (empty) old readBuffer
 
             totalSize--;
+            pollsCounter.inc();
+            sizeGauge.dec();
             return readBuffer.pollFirst();
         }
 
@@ -329,6 +393,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
         }
 
         spillFiles.addLast(spillFile);
+        spillsCounter.inc();
+        spillFilesGauge.inc();
     }
 
     /**
@@ -338,6 +404,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
     private void loadFromDisk() {
         Path spillFile = spillFiles.pollFirst();
         if (spillFile == null) return;
+        loadsCounter.inc();
+        spillFilesGauge.dec();
 
         try (InputStream is = new BufferedInputStream(Files.newInputStream(spillFile))) {
             while (true) {

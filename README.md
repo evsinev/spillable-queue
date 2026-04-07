@@ -42,6 +42,8 @@ try (ISpillableQueue<String> queue =
 | `offer(E)` | Add an element. Spills oldest batch to disk if write buffer is full. Never blocks. |
 | `poll()` | Retrieve and remove head element, or `null` if empty. Non-blocking. |
 | `take()` | Retrieve and remove head element, blocking until available. Returns `null` if queue is closed. |
+| `drainTo(int)` | Remove up to N elements and return them as a list. Non-blocking. |
+| `drainTo(int, Duration)` | Same, but blocks until at least one element is available or timeout elapses. |
 | `size()` | Total element count across memory + disk. |
 | `close()` | Close the queue and delete spill files. |
 
@@ -99,6 +101,23 @@ src/
     └── SpillableQueueDemo.java                     # demo with 8 writers + 1 reader
 ```
 
+## Metrics (Prometheus)
+
+Dependency: `io.prometheus:simpleclient_common:0.16.0`.
+
+All metrics carry the label `queue_name` (value from the `queueName` constructor argument).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `spillable_queue_offered_total` | Counter | Elements added via `offer()` |
+| `spillable_queue_polled_total` | Counter | Elements removed from the queue |
+| `spillable_queue_spills_total` | Counter | Spill-to-disk batch operations |
+| `spillable_queue_loads_total` | Counter | Load-from-disk batch operations |
+| `spillable_queue_size` | Gauge | Current total elements (memory + disk) |
+| `spillable_queue_spill_files` | Gauge | Current number of spill files on disk |
+
+Expose via your preferred Prometheus servlet or `TextFormat.write004()` from `simpleclient_common`.
+
 ## Design notes
 
 - Concurrency: `ReentrantLock` + `Condition`, no `synchronized`
@@ -110,8 +129,7 @@ src/
 
 - `offer()` never blocks — it always spills to disk instead of applying back-pressure on writers
 - No bounded disk usage (no cap on total spill file size)
-- No `drainTo(Collection, maxElements)` batch poll
-- No metrics (spill/load counts, latency)
+- No latency histogram metrics (offer/poll timing)
 - No compression for spill files (snappy/lz4)
 - No memory-mapped file I/O
 - No graceful shutdown with drain

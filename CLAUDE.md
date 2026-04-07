@@ -51,6 +51,22 @@ src/
     └── SpillableQueueDemo.java                      # демо
 ```
 
+## Метрики (Prometheus)
+
+Зависимость: `io.prometheus:simpleclient_common:0.16.0`.
+
+Все метрики имеют label `queue_name` (значение из поля `queueName`).
+Метрики объявлены `static` в `SpillableQueueImpl`; `Counter.Child` / `Gauge.Child` с привязанным label хранятся в полях инстанса.
+
+| Метрика | Тип | Что считает |
+|---|---|---|
+| `spillable_queue_offered_total` | Counter | элементы, добавленные через `offer()` |
+| `spillable_queue_polled_total` | Counter | элементы, извлечённые из очереди |
+| `spillable_queue_spills_total` | Counter | батч-операции записи на диск |
+| `spillable_queue_loads_total` | Counter | батч-операции загрузки с диска |
+| `spillable_queue_size` | Gauge | текущий размер очереди (память + диск) |
+| `spillable_queue_spill_files` | Gauge | текущее количество spill-файлов на диске |
+
 ## Conventions
 
 - Java 21, без preview features
@@ -64,8 +80,7 @@ src/
 ## Что НЕ реализовано (backlog)
 
 - Back-pressure: `offer()` сейчас не блокирует писателей, всегда spill'ит на диск
-- Batch poll: `drainTo(Collection, maxElements)` для читателя
-- Метрики: счётчики spill/load операций, latency
+- Метрики latency (histogram для offer/poll)
 - Compression: сжатие spill файлов (snappy/lz4)
 - Memory-mapped files вместо обычного I/O
 - Graceful shutdown с drain
