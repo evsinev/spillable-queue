@@ -7,19 +7,20 @@ Thread-safe bounded queue на Java 21, которая хранит элемен
 ## Архитектура
 
 ```
-Writers ──► [ memoryBuffer (ArrayDeque, bounded) ]
+Writers ──► [ writeBuffer (ArrayDeque, bounded) ]
                      │ overflow
                      ▼
             [ disk spill files (FIFO) ]
-                     │ refill when memory empty
+                     │ refill when readBuffer empty
                      ▼
-              Reader (poll / take)
+            [ readBuffer ] ──► Reader (poll / take)
 ```
 
 Ключевые классы:
-- `SpillableQueue<E>` — основная очередь, lock-based concurrency
-- `Serializer<E>` — интерфейс сериализации для spill на диск
-- `JavaSerializer<E>` — дефолтная реализация через ObjectOutputStream
+- `SpillableQueueImpl<E>` — основная очередь, lock-based concurrency
+- `ISpillableQueue<E>` — публичный интерфейс очереди
+- `ISpillableQueueSerializer<E>` — интерфейс сериализации для spill на диск
+- `SpillableQueueSerializerJavaSerImpl<E>` — дефолтная реализация через ObjectOutputStream
 - `SpillableQueueDemo` — демо с 8 писателями и 1 читателем
 
 ## Сборка и запуск
@@ -32,20 +33,22 @@ mvn clean package
 mvn test
 
 # запуск демо
-mvn exec:java -Dexec.mainClass="com.queue.SpillableQueueDemo"
+mvn exec:java -Dexec.mainClass="com.payneteasy.spillable_queue.SpillableQueueDemo"
 ```
 
 ## Структура проекта
 
 ```
 src/
-├── main/java/com/queue/
-│   ├── SpillableQueue.java      # основная очередь
-│   ├── Serializer.java          # интерфейс сериализации
-│   ├── JavaSerializer.java      # дефолтный сериализатор
-│   └── SpillableQueueDemo.java  # демо
-└── test/java/com/queue/
-    └── SpillableQueueTest.java  # юнит-тесты
+├── main/java/com/payneteasy/spillable_queue/
+│   ├── ISpillableQueue.java                         # публичный интерфейс очереди
+│   ├── ISpillableQueueSerializer.java               # интерфейс сериализации
+│   └── impl/
+│       ├── SpillableQueueImpl.java                  # основная очередь
+│       └── SpillableQueueSerializerJavaSerImpl.java # дефолтный сериализатор
+└── test/java/com/payneteasy/spillable_queue/
+    ├── SpillableQueueImplTest.java                  # юнит-тесты
+    └── SpillableQueueDemo.java                      # демо
 ```
 
 ## Conventions

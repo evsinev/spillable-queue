@@ -5,8 +5,12 @@ import com.payneteasy.spillable_queue.ISpillableQueueSerializer;
 
 import java.io.*;
 import java.nio.file.*;
+import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
@@ -165,6 +169,52 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
         } finally {
             lock.unlock();
         }
+    }
+
+    /**
+     * Removes up to {@code maxElements} elements and returns them as a list.
+     * Non-blocking: returns immediately, possibly with an empty list.
+     */
+    @Override
+    public List<E> drainTo(int maxElements) {
+        lock.lock();
+        try {
+            return drainInternal(maxElements);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Removes up to {@code maxElements} elements and returns them as a list.
+     * Blocks until at least one element is available or {@code timeout} elapses.
+     * Returns an empty list if the queue is still empty after the timeout.
+     */
+    @Override
+    public List<E> drainTo(int maxElements, Duration timeout) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        lock.lock();
+        try {
+            while (totalSize == 0 && !closed.get()) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                notEmpty.awaitNanos(remaining);
+            }
+            return drainInternal(maxElements);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Must be called under lock. */
+    private List<E> drainInternal(int maxElements) {
+        List<E> result = new ArrayList<>(Math.min(maxElements, 256));
+        for (int i = 0; i < maxElements; i++) {
+            E elem = pollInternal();
+            if (elem == null) break;
+            result.add(elem);
+        }
+        return result;
     }
 
     /* ──────────────────────── introspection ──────────────────────── */

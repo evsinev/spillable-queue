@@ -5,6 +5,8 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -274,6 +276,101 @@ class SpillableQueueImplTest {
             for (int i = 0; i < 5000; i++) {
                 assertEquals("large-" + i, queue.poll());
             }
+        }
+    }
+
+    // ───────────────────── drainTo ─────────────────────
+
+    @Test
+    @DisplayName("drainTo() returns empty list on empty queue")
+    void drainToEmptyQueue() {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 10, 5, spillDir)) {
+            List<String> result = queue.drainTo(10);
+            assertNotNull(result);
+            assertTrue(result.isEmpty());
+        }
+    }
+
+    @Test
+    @DisplayName("drainTo() returns up to maxElements, leaves the rest")
+    void drainToMaxElements() {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 20, 10, spillDir)) {
+            for (int i = 0; i < 10; i++) queue.offer("msg-" + i);
+
+            List<String> result = queue.drainTo(4);
+            assertEquals(4, result.size());
+            assertEquals(List.of("msg-0", "msg-1", "msg-2", "msg-3"), result);
+            assertEquals(6, queue.size());
+        }
+    }
+
+    @Test
+    @DisplayName("drainTo() preserves FIFO order across spill")
+    void drainToFifoAcrossSpill() {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 3, 2, spillDir)) {
+            for (int i = 0; i < 12; i++) queue.offer("msg-" + i);
+
+            List<String> all = queue.drainTo(100);
+            assertEquals(12, all.size());
+            for (int i = 0; i < 12; i++) {
+                assertEquals("msg-" + i, all.get(i), "FIFO violation at " + i);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("drainTo(timeout) returns empty list when timeout elapses with no elements")
+    void drainToTimeoutEmpty() throws Exception {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 10, 5, spillDir)) {
+            long start = System.nanoTime();
+            List<String> result = queue.drainTo(10, Duration.ofMillis(100));
+            long elapsed = System.nanoTime() - start;
+
+            assertTrue(result.isEmpty());
+            assertTrue(elapsed >= 100_000_000L, "Should have waited ~100 ms");
+        }
+    }
+
+    @Test
+    @DisplayName("drainTo(timeout) returns elements offered before timeout")
+    void drainToTimeoutReceivesElements() throws Exception {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 10, 5, spillDir)) {
+            Executors.newSingleThreadScheduledExecutor().schedule(() -> {
+                queue.offer("a");
+                queue.offer("b");
+                queue.offer("c");
+            }, 50, TimeUnit.MILLISECONDS);
+
+            List<String> result = queue.drainTo(10, Duration.ofMillis(500));
+            assertFalse(result.isEmpty());
+            assertTrue(result.contains("a"));
+        }
+    }
+
+    @Test
+    @DisplayName("drainTo(timeout) respects maxElements limit")
+    void drainToTimeoutRespectsMax() throws Exception {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 10, 5, spillDir)) {
+            for (int i = 0; i < 8; i++) queue.offer("x-" + i);
+
+            List<String> result = queue.drainTo(3, Duration.ofMillis(100));
+            assertEquals(3, result.size());
+            assertEquals(5, queue.size());
+        }
+    }
+
+    @Test
+    @DisplayName("drainTo(timeout) returns immediately when elements already present")
+    void drainToTimeoutImmediate() throws Exception {
+        try (var queue = new SpillableQueueImpl<String>("test-queue-1", 10, 5, spillDir)) {
+            queue.offer("ready");
+
+            long start = System.nanoTime();
+            List<String> result = queue.drainTo(10, Duration.ofSeconds(10));
+            long elapsed = System.nanoTime() - start;
+
+            assertEquals(List.of("ready"), result);
+            assertTrue(elapsed < 1_000_000_000L, "Should return well before 1 s");
         }
     }
 
