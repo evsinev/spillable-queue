@@ -4,6 +4,7 @@ import com.payneteasy.spillable_queue.ISpillableQueue;
 import com.payneteasy.spillable_queue.ISpillableQueueSerializer;
 import io.prometheus.client.Counter;
 import io.prometheus.client.Gauge;
+import io.prometheus.client.Histogram;
 
 import java.io.*;
 import java.nio.file.*;
@@ -87,6 +88,20 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
             .labelNames("queue_name")
             .register();
 
+    private static final Histogram OFFER_DURATION = Histogram.build()
+            .name("spillable_queue_offer_duration_seconds")
+            .help("Latency of offer() calls including any spill-to-disk")
+            .labelNames("queue_name")
+            .buckets(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0)
+            .register();
+
+    private static final Histogram POLL_DURATION = Histogram.build()
+            .name("spillable_queue_poll_duration_seconds")
+            .help("Latency of individual element dequeue operations excluding blocking wait")
+            .labelNames("queue_name")
+            .buckets(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0)
+            .register();
+
     /* ──────────────────────── configuration ──────────────────────── */
 
     private final int                          memoryCapacity;
@@ -97,12 +112,14 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
 
     /* ──────────────────────── metric children (pre-bound label) ──────────────────────── */
 
-    private final Counter.Child offersCounter;
-    private final Counter.Child pollsCounter;
-    private final Counter.Child spillsCounter;
-    private final Counter.Child loadsCounter;
-    private final Gauge.Child   sizeGauge;
-    private final Gauge.Child   spillFilesGauge;
+    private final Counter.Child   offersCounter;
+    private final Counter.Child   pollsCounter;
+    private final Counter.Child   spillsCounter;
+    private final Counter.Child   loadsCounter;
+    private final Gauge.Child     sizeGauge;
+    private final Gauge.Child     spillFilesGauge;
+    private final Histogram.Child offerHistogram;
+    private final Histogram.Child pollHistogram;
 
     /* ──────────────────────── state ──────────────────────── */
 
@@ -160,6 +177,8 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
         this.loadsCounter    = LOADS_TOTAL.labels(aQueueName);
         this.sizeGauge       = QUEUE_SIZE.labels(aQueueName);
         this.spillFilesGauge = SPILL_FILES.labels(aQueueName);
+        this.offerHistogram  = OFFER_DURATION.labels(aQueueName);
+        this.pollHistogram   = POLL_DURATION.labels(aQueueName);
 
         try {
             Files.createDirectories(spillDir);
@@ -177,6 +196,7 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
     public void offer(E element) {
         if (closed.get()) throw new IllegalStateException("Queue is closed");
 
+        Histogram.Timer timer = offerHistogram.startTimer();
         lock.lock();
         try {
             if (writeBuffer.size() >= memoryCapacity) {
@@ -190,6 +210,7 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
             notEmpty.signal();
         } finally {
             lock.unlock();
+            timer.observeDuration();
         }
     }
 
@@ -337,38 +358,43 @@ public class SpillableQueueImpl<E extends Serializable> implements ISpillableQue
      * This guarantees FIFO across all three tiers.
      */
     private E pollInternal() {
-        // 1. Read buffer has the oldest ready-to-read data
-        if (!readBuffer.isEmpty()) {
-            totalSize--;
-            pollsCounter.inc();
-            sizeGauge.dec();
-            return readBuffer.pollFirst();
-        }
-
-        // 2. Load the oldest spill file into readBuffer
-        if (!spillFiles.isEmpty()) {
-            loadFromDisk();
+        Histogram.Timer timer = pollHistogram.startTimer();
+        try {
+            // 1. Read buffer has the oldest ready-to-read data
             if (!readBuffer.isEmpty()) {
                 totalSize--;
                 pollsCounter.inc();
                 sizeGauge.dec();
                 return readBuffer.pollFirst();
             }
+
+            // 2. Load the oldest spill file into readBuffer
+            if (!spillFiles.isEmpty()) {
+                loadFromDisk();
+                if (!readBuffer.isEmpty()) {
+                    totalSize--;
+                    pollsCounter.inc();
+                    sizeGauge.dec();
+                    return readBuffer.pollFirst();
+                }
+            }
+
+            // 3. No spill files — swap writeBuffer into readBuffer (O(1))
+            if (!writeBuffer.isEmpty()) {
+                Deque<E> tmp = readBuffer;
+                readBuffer = writeBuffer;
+                writeBuffer = tmp;  // reuse the (empty) old readBuffer
+
+                totalSize--;
+                pollsCounter.inc();
+                sizeGauge.dec();
+                return readBuffer.pollFirst();
+            }
+
+            return null;
+        } finally {
+            timer.observeDuration();
         }
-
-        // 3. No spill files — swap writeBuffer into readBuffer (O(1))
-        if (!writeBuffer.isEmpty()) {
-            Deque<E> tmp = readBuffer;
-            readBuffer = writeBuffer;
-            writeBuffer = tmp;  // reuse the (empty) old readBuffer
-
-            totalSize--;
-            pollsCounter.inc();
-            sizeGauge.dec();
-            return readBuffer.pollFirst();
-        }
-
-        return null;
     }
 
     /**

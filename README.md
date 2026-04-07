@@ -115,6 +115,10 @@ All metrics carry the label `queue_name` (value from the `queueName` constructor
 | `spillable_queue_loads_total` | Counter | Load-from-disk batch operations |
 | `spillable_queue_size` | Gauge | Current total elements (memory + disk) |
 | `spillable_queue_spill_files` | Gauge | Current number of spill files on disk |
+| `spillable_queue_offer_duration_seconds` | Histogram | Latency of `offer()` including any spill-to-disk |
+| `spillable_queue_poll_duration_seconds` | Histogram | Latency of individual dequeue operations excluding blocking wait |
+
+Histogram buckets: 1µs, 10µs, 100µs, 1ms, 10ms, 100ms, 1s.
 
 Expose via your preferred Prometheus servlet or `TextFormat.write004()` from `simpleclient_common`.
 
@@ -129,7 +133,6 @@ Expose via your preferred Prometheus servlet or `TextFormat.write004()` from `si
 
 - `offer()` never blocks — it always spills to disk instead of applying back-pressure on writers
 - No bounded disk usage (no cap on total spill file size)
-- No latency histogram metrics (offer/poll timing)
 - No compression for spill files (snappy/lz4)
 - No memory-mapped file I/O
 - No graceful shutdown with drain

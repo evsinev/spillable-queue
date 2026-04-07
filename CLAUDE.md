@@ -66,6 +66,10 @@ src/
 | `spillable_queue_loads_total` | Counter | батч-операции загрузки с диска |
 | `spillable_queue_size` | Gauge | текущий размер очереди (память + диск) |
 | `spillable_queue_spill_files` | Gauge | текущее количество spill-файлов на диске |
+| `spillable_queue_offer_duration_seconds` | Histogram | latency `offer()` включая возможный spill на диск |
+| `spillable_queue_poll_duration_seconds` | Histogram | latency одного извлечения элемента без учёта блокирующего ожидания |
+
+Buckets гистограмм: 1µs, 10µs, 100µs, 1ms, 10ms, 100ms, 1s.
 
 ## Conventions
 
@@ -80,7 +84,6 @@ src/
 ## Что НЕ реализовано (backlog)
 
 - Back-pressure: `offer()` сейчас не блокирует писателей, всегда spill'ит на диск
-- Метрики latency (histogram для offer/poll)
 - Compression: сжатие spill файлов (snappy/lz4)
 - Memory-mapped files вместо обычного I/O
 - Graceful shutdown с drain
